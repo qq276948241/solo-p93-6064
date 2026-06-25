@@ -1,6 +1,9 @@
 package model
 
 import (
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -69,6 +72,7 @@ type Appointment struct {
 	ApplianceTypeID uint8     `gorm:"not null" json:"appliance_type_id"`
 	ApplianceWeight float64   `gorm:"type:decimal(8,2);not null" json:"appliance_weight"`
 	Status          uint8     `gorm:"not null;default:1" json:"status"`
+	Images          StringArr `gorm:"type:text" json:"images,omitempty"`
 	Remark          string    `gorm:"size:255;default:null" json:"remark,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
@@ -79,4 +83,31 @@ type Appointment struct {
 
 func (Appointment) TableName() string {
 	return "appointments"
+}
+
+type StringArr []string
+
+func (a StringArr) Value() (driver.Value, error) {
+	if len(a) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(a)
+	return string(b), err
+}
+
+func (a *StringArr) Scan(input interface{}) error {
+	if input == nil {
+		*a = nil
+		return nil
+	}
+	var bytes []byte
+	switch v := input.(type) {
+	case []byte:
+		bytes = v
+	case string:
+		bytes = []byte(v)
+	default:
+		return errors.New("invalid type for StringArr")
+	}
+	return json.Unmarshal(bytes, a)
 }

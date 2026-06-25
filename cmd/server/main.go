@@ -27,6 +27,9 @@ func main() {
 	}
 
 	r := gin.Default()
+	r.MaxMultipartMemory = 32 << 20
+
+	r.Static("/uploads", "./uploads")
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, response.Success(gin.H{"status": "ok"}))
@@ -75,6 +78,7 @@ func setupRoutes(r *gin.Engine) {
 		adminAuth.GET("/appliance-types", adminHandler.GetApplianceTypes)
 		adminAuth.GET("/slots", adminHandler.GetSlots)
 		adminAuth.GET("/appointments", adminHandler.ListAppointments)
+		adminAuth.GET("/appointments/:id", adminHandler.GetAppointmentDetail)
 		adminAuth.PUT("/appointments/:id/status", adminHandler.UpdateAppointmentStatus)
 		adminAuth.GET("/statistics", adminHandler.Statistics)
 	}

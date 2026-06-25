@@ -41,12 +41,22 @@ type SlotListResponse struct {
 }
 
 type CreateAppointmentRequest struct {
-	SlotID          uint64  `json:"slot_id" binding:"required,min=1"`
-	Phone           string  `json:"phone" binding:"required,len=11"`
-	Address         string  `json:"address" binding:"required,min=5,max=255"`
-	ApplianceTypeID uint8   `json:"appliance_type_id" binding:"required,min=1"`
-	ApplianceWeight float64 `json:"appliance_weight" binding:"required,gt=0"`
-	Remark          string  `json:"remark"`
+	SlotID          uint64   `json:"slot_id" binding:"required,min=1"`
+	Phone           string   `json:"phone" binding:"required,len=11"`
+	Address         string   `json:"address" binding:"required,min=5,max=255"`
+	ApplianceTypeID uint8    `json:"appliance_type_id" binding:"required,min=1"`
+	ApplianceWeight float64  `json:"appliance_weight" binding:"required,gt=0"`
+	Remark          string   `json:"remark"`
+	Images          []string `json:"images,omitempty"`
+}
+
+type CreateAppointmentForm struct {
+	SlotID          uint64  `form:"slot_id" binding:"required,min=1"`
+	Phone           string  `form:"phone" binding:"required,len=11"`
+	Address         string  `form:"address" binding:"required,min=5,max=255"`
+	ApplianceTypeID uint8   `form:"appliance_type_id" binding:"required,min=1"`
+	ApplianceWeight float64 `form:"appliance_weight" binding:"required,gt=0"`
+	Remark          string  `form:"remark"`
 }
 
 type CreateAppointmentResponse struct {
@@ -60,21 +70,22 @@ type MyAppointmentListResponse struct {
 }
 
 type AppointmentItem struct {
-	ID              uint64  `json:"id"`
-	OrderNo         string  `json:"order_no"`
-	SlotID          uint64  `json:"slot_id"`
-	SlotDate        string  `json:"slot_date"`
-	StartTime       string  `json:"start_time"`
-	EndTime         string  `json:"end_time"`
-	Phone           string  `json:"phone"`
-	Address         string  `json:"address"`
-	ApplianceTypeID uint8   `json:"appliance_type_id"`
-	ApplianceType   string  `json:"appliance_type"`
-	ApplianceWeight float64 `json:"appliance_weight"`
-	Status          uint8   `json:"status"`
-	StatusText      string  `json:"status_text"`
-	Remark          string  `json:"remark,omitempty"`
-	CreatedAt       string  `json:"created_at"`
+	ID              uint64   `json:"id"`
+	OrderNo         string   `json:"order_no"`
+	SlotID          uint64   `json:"slot_id"`
+	SlotDate        string   `json:"slot_date"`
+	StartTime       string   `json:"start_time"`
+	EndTime         string   `json:"end_time"`
+	Phone           string   `json:"phone"`
+	Address         string   `json:"address"`
+	ApplianceTypeID uint8    `json:"appliance_type_id"`
+	ApplianceType   string   `json:"appliance_type"`
+	ApplianceWeight float64  `json:"appliance_weight"`
+	Status          uint8    `json:"status"`
+	StatusText      string   `json:"status_text"`
+	Images          []string `json:"images,omitempty"`
+	Remark          string   `json:"remark,omitempty"`
+	CreatedAt       string   `json:"created_at"`
 }
 
 type AdminAppointmentListRequest struct {

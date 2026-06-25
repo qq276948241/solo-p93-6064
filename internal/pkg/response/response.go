@@ -32,6 +32,11 @@ const (
 	CodeAppointmentDone = 20006
 	CodeAppointmentCanceled = 20007
 	CodeStatusInvalid   = 20008
+	CodeImageTooMany    = 20009
+	CodeImageTooFew     = 20010
+	CodeImageInvalidExt = 20011
+	CodeImageTooLarge   = 20012
+	CodeImageSaveFailed = 20013
 )
 
 var msgMap = map[int]string{
@@ -60,6 +65,11 @@ var msgMap = map[int]string{
 	CodeAppointmentDone:     "预约已完成，无法修改",
 	CodeAppointmentCanceled: "预约已取消，无法修改",
 	CodeStatusInvalid:       "状态值无效",
+	CodeImageTooMany:        "图片数量过多，最多5张",
+	CodeImageTooFew:         "图片数量不足，至少3张",
+	CodeImageInvalidExt:     "图片格式不支持，仅允许jpg/jpeg/png/webp",
+	CodeImageTooLarge:       "图片过大，单张不超过5MB",
+	CodeImageSaveFailed:     "图片保存失败",
 }
 
 func GetMsg(code int) string {

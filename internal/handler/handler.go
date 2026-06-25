@@ -5,6 +5,7 @@ import (
 	"appliance-recycle/internal/pkg/middleware"
 	"appliance-recycle/internal/pkg/response"
 	"appliance-recycle/internal/service"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 
@@ -81,23 +82,66 @@ func (h *ResidentHandler) GetSlots(c *gin.Context) {
 }
 
 func (h *ResidentHandler) CreateAppointment(c *gin.Context) {
+	contentType := c.ContentType()
 	var req dto.CreateAppointmentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, response.FailWithMsg(response.CodeParamError, err.Error()))
+	var files []*multipart.FileHeader
+
+	if contentType == "application/json" || contentType == "" {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, response.FailWithMsg(response.CodeParamError, err.Error()))
+			return
+		}
+	} else {
+		var form dto.CreateAppointmentForm
+		if err := c.ShouldBind(&form); err != nil {
+			c.JSON(http.StatusBadRequest, response.FailWithMsg(response.CodeParamError, err.Error()))
+			return
+		}
+		req = dto.CreateAppointmentRequest{
+			SlotID:          form.SlotID,
+			Phone:           form.Phone,
+			Address:         form.Address,
+			ApplianceTypeID: form.ApplianceTypeID,
+			ApplianceWeight: form.ApplianceWeight,
+			Remark:          form.Remark,
+		}
+		formFiles, err := c.MultipartForm()
+		if err == nil && formFiles != nil && len(formFiles.File["images"]) > 0 {
+			files = formFiles.File["images"]
+		}
+		if len(files) == 0 {
+			_, header, err := c.Request.FormFile("images")
+			if err == nil && header != nil {
+				files = []*multipart.FileHeader{header}
+			}
+		}
+	}
+
+	if req.SlotID == 0 || req.Phone == "" || req.Address == "" || req.ApplianceTypeID == 0 || req.ApplianceWeight <= 0 {
+		c.JSON(http.StatusBadRequest, response.Fail(response.CodeParamError))
+		return
+	}
+	if len(req.Phone) != 11 {
+		c.JSON(http.StatusBadRequest, response.Fail(response.CodeParamError))
+		return
+	}
+	if len(req.Address) < 5 || len(req.Address) > 255 {
+		c.JSON(http.StatusBadRequest, response.Fail(response.CodeParamError))
 		return
 	}
 
 	residentID := middleware.GetUserID(c)
-	data, code, err := service.CreateAppointment(residentID, &req)
+	data, code, err := service.CreateAppointment(residentID, &req, files)
 	if code != response.CodeSuccess {
 		httpStatus := http.StatusBadRequest
-		if code == response.CodeDBError || code == response.CodeServerError {
+		if code == response.CodeDBError || code == response.CodeServerError || code == response.CodeImageSaveFailed {
 			httpStatus = http.StatusInternalServerError
 		}
-		if code == response.CodeSlotNotFound || code == response.CodeApplianceInvalid {
+		if code == response.CodeSlotNotFound || code == response.CodeApplianceInvalid || code == response.CodeAppointmentNotFound {
 			httpStatus = http.StatusNotFound
 		}
 		c.JSON(httpStatus, response.Fail(code))
+		_ = err
 		return
 	}
 	_ = err
@@ -271,5 +315,25 @@ func (h *AdminHandler) GetSlots(c *gin.Context) {
 		return
 	}
 	_ = err
+	c.JSON(http.StatusOK, response.Success(data))
+}
+
+func (h *AdminHandler) GetAppointmentDetail(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, response.Fail(response.CodeParamError))
+		return
+	}
+	data, code, err := service.GetAppointmentDetail(id)
+	if code != response.CodeSuccess {
+		httpStatus := http.StatusInternalServerError
+		if code == response.CodeAppointmentNotFound {
+			httpStatus = http.StatusNotFound
+		}
+		c.JSON(httpStatus, response.Fail(code))
+		_ = err
+		return
+	}
 	c.JSON(http.StatusOK, response.Success(data))
 }
