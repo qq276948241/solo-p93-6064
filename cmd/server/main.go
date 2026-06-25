@@ -6,6 +6,7 @@ import (
 	"appliance-recycle/internal/pkg/database"
 	"appliance-recycle/internal/pkg/middleware"
 	"appliance-recycle/internal/pkg/response"
+	"appliance-recycle/internal/pkg/upload_helper"
 	"appliance-recycle/internal/service"
 	"net/http"
 
@@ -26,24 +27,26 @@ func main() {
 		panic("ensure default admin failed: " + err.Error())
 	}
 
+	storage := upload_helper.NewLocalStorage(cfg.Upload)
+	appointmentSvc := service.NewAppointmentService(storage, cfg.Upload)
+
 	r := gin.Default()
 	r.MaxMultipartMemory = 32 << 20
-
-	r.Static("/uploads", "./uploads")
+	r.Static("/uploads", cfg.Upload.LocalPath)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, response.Success(gin.H{"status": "ok"}))
 	})
 
-	setupRoutes(r)
+	setupRoutes(r, appointmentSvc)
 
 	if err := r.Run(":" + cfg.Server.Port); err != nil {
 		panic("start server failed: " + err.Error())
 	}
 }
 
-func setupRoutes(r *gin.Engine) {
-	residentHandler := handler.NewResidentHandler()
+func setupRoutes(r *gin.Engine, appointmentSvc *service.AppointmentService) {
+	residentHandler := handler.NewResidentHandler(appointmentSvc)
 	adminHandler := handler.NewAdminHandler()
 
 	r.GET("/api/appliance-types", residentHandler.GetApplianceTypes)

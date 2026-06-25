@@ -1,20 +1,18 @@
 package service
 
 import (
+	"appliance-recycle/internal/config"
 	"appliance-recycle/internal/dto"
 	"appliance-recycle/internal/model"
 	"appliance-recycle/internal/pkg/database"
 	"appliance-recycle/internal/pkg/jwt"
 	"appliance-recycle/internal/pkg/response"
+	"appliance-recycle/internal/pkg/upload_helper"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"mime/multipart"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,19 +21,120 @@ import (
 	"gorm.io/gorm"
 )
 
-const (
-	MinImageCount     = 3
-	MaxImageCount     = 5
-	MaxImageSize      = 5 * 1024 * 1024
-	ImageUploadPath   = "./uploads"
-	ImageURLPrefix    = "/uploads"
-)
+type AppointmentService struct {
+	storage upload_helper.Storage
+	upload  config.UploadConfig
+}
 
-var allowedExts = map[string]bool{
-	".jpg":  true,
-	".jpeg": true,
-	".png":  true,
-	".webp": true,
+func NewAppointmentService(storage upload_helper.Storage, upload config.UploadConfig) *AppointmentService {
+	return &AppointmentService{storage: storage, upload: upload}
+}
+
+func (s *AppointmentService) ValidateAndSaveImages(files []*multipart.FileHeader) ([]string, int, error) {
+	if len(files) < s.upload.MinCount {
+		return nil, response.CodeImageTooFew, errors.New("too few images")
+	}
+	if len(files) > s.upload.MaxCount {
+		return nil, response.CodeImageTooMany, errors.New("too many images")
+	}
+
+	allowedExt := s.upload.ExtSet()
+	for _, fh := range files {
+		if fh.Size > s.upload.MaxSize {
+			return nil, response.CodeImageTooLarge, errors.New("image too large")
+		}
+		ext := strings.ToLower(filepath.Ext(fh.Filename))
+		if !allowedExt[ext] {
+			return nil, response.CodeImageInvalidExt, errors.New("invalid extension")
+		}
+	}
+
+	imageURLs := make([]string, 0, len(files))
+	for _, fh := range files {
+		url, err := s.storage.Save(fh)
+		if err != nil {
+			return nil, response.CodeImageSaveFailed, err
+		}
+		imageURLs = append(imageURLs, url)
+	}
+	return imageURLs, response.CodeSuccess, nil
+}
+
+func (s *AppointmentService) CreateAppointment(residentID uint64, req *dto.CreateAppointmentRequest, files []*multipart.FileHeader) (*dto.CreateAppointmentResponse, int, error) {
+	var applianceType model.ApplianceType
+	if err := database.DB.Where("id = ?", req.ApplianceTypeID).First(&applianceType).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, response.CodeApplianceInvalid, err
+		}
+		return nil, response.CodeDBError, err
+	}
+
+	var imageURLs []string
+	if len(files) > 0 {
+		urls, code, err := s.ValidateAndSaveImages(files)
+		if code != response.CodeSuccess {
+			return nil, code, err
+		}
+		imageURLs = urls
+	} else if len(req.Images) > 0 {
+		imageURLs = req.Images
+	}
+
+	tx := database.DB.Begin()
+
+	var slot model.TimeSlot
+	if err := tx.Set("gorm:query_option", "FOR UPDATE").
+		Where("id = ?", req.SlotID).First(&slot).Error; err != nil {
+		tx.Rollback()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, response.CodeSlotNotFound, err
+		}
+		return nil, response.CodeDBError, err
+	}
+
+	slotEndTime, _ := time.ParseInLocation("2006-01-02 15:04:05",
+		slot.SlotDate+" "+slot.EndTime+":00", time.Local)
+	if slotEndTime.Before(time.Now()) {
+		tx.Rollback()
+		return nil, response.CodeSlotPast, errors.New("slot past")
+	}
+
+	if slot.BookedCount >= slot.Capacity {
+		tx.Rollback()
+		return nil, response.CodeSlotFull, errors.New("slot full")
+	}
+
+	orderNo := generateOrderNo()
+
+	appointment := model.Appointment{
+		OrderNo:         orderNo,
+		ResidentID:      residentID,
+		SlotID:          req.SlotID,
+		Phone:           req.Phone,
+		Address:         req.Address,
+		ApplianceTypeID: req.ApplianceTypeID,
+		ApplianceWeight: req.ApplianceWeight,
+		Status:          model.AppointmentStatusPending,
+		Images:          model.StringArr(imageURLs),
+		Remark:          req.Remark,
+	}
+
+	if err := tx.Create(&appointment).Error; err != nil {
+		tx.Rollback()
+		return nil, response.CodeDBError, err
+	}
+
+	if err := tx.Model(&slot).Update("booked_count", slot.BookedCount+1).Error; err != nil {
+		tx.Rollback()
+		return nil, response.CodeDBError, err
+	}
+
+	tx.Commit()
+
+	return &dto.CreateAppointmentResponse{
+		OrderNo: orderNo,
+		ID:      appointment.ID,
+	}, response.CodeSuccess, nil
 }
 
 func RegisterResident(req *dto.RegisterRequest) (int, error) {
@@ -200,140 +299,6 @@ func generateWeekSlots(startDate, endDate time.Time) []model.TimeSlot {
 	}
 	tx.Commit()
 	return slots
-}
-
-func CreateAppointment(residentID uint64, req *dto.CreateAppointmentRequest, files []*multipart.FileHeader) (*dto.CreateAppointmentResponse, int, error) {
-	var applianceType model.ApplianceType
-	if err := database.DB.Where("id = ?", req.ApplianceTypeID).First(&applianceType).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, response.CodeApplianceInvalid, err
-		}
-		return nil, response.CodeDBError, err
-	}
-
-	var imageURLs []string
-	if len(files) > 0 {
-		if len(files) < MinImageCount {
-			return nil, response.CodeImageTooFew, errors.New("too few images")
-		}
-		if len(files) > MaxImageCount {
-			return nil, response.CodeImageTooMany, errors.New("too many images")
-		}
-		if err := os.MkdirAll(ImageUploadPath, 0755); err != nil {
-			return nil, response.CodeImageSaveFailed, err
-		}
-		for _, fh := range files {
-			if fh.Size > MaxImageSize {
-				return nil, response.CodeImageTooLarge, errors.New("image too large")
-			}
-			ext := strings.ToLower(filepath.Ext(fh.Filename))
-			if !allowedExts[ext] {
-				return nil, response.CodeImageInvalidExt, errors.New("invalid extension")
-			}
-		}
-		for _, fh := range files {
-			url, err := saveImageFile(fh)
-			if err != nil {
-				return nil, response.CodeImageSaveFailed, err
-			}
-			imageURLs = append(imageURLs, url)
-		}
-	} else if len(req.Images) > 0 {
-		imageURLs = req.Images
-	}
-
-	tx := database.DB.Begin()
-
-	var slot model.TimeSlot
-	if err := tx.Set("gorm:query_option", "FOR UPDATE").
-		Where("id = ?", req.SlotID).First(&slot).Error; err != nil {
-		tx.Rollback()
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, response.CodeSlotNotFound, err
-		}
-		return nil, response.CodeDBError, err
-	}
-
-	slotEndTime, _ := time.ParseInLocation("2006-01-02 15:04:05",
-		slot.SlotDate+" "+slot.EndTime+":00", time.Local)
-	if slotEndTime.Before(time.Now()) {
-		tx.Rollback()
-		return nil, response.CodeSlotPast, errors.New("slot past")
-	}
-
-	if slot.BookedCount >= slot.Capacity {
-		tx.Rollback()
-		return nil, response.CodeSlotFull, errors.New("slot full")
-	}
-
-	orderNo := generateOrderNo()
-
-	appointment := model.Appointment{
-		OrderNo:         orderNo,
-		ResidentID:      residentID,
-		SlotID:          req.SlotID,
-		Phone:           req.Phone,
-		Address:         req.Address,
-		ApplianceTypeID: req.ApplianceTypeID,
-		ApplianceWeight: req.ApplianceWeight,
-		Status:          model.AppointmentStatusPending,
-		Images:          model.StringArr(imageURLs),
-		Remark:          req.Remark,
-	}
-
-	if err := tx.Create(&appointment).Error; err != nil {
-		tx.Rollback()
-		return nil, response.CodeDBError, err
-	}
-
-	if err := tx.Model(&slot).Update("booked_count", slot.BookedCount+1).Error; err != nil {
-		tx.Rollback()
-		return nil, response.CodeDBError, err
-	}
-
-	tx.Commit()
-
-	return &dto.CreateAppointmentResponse{
-		OrderNo: orderNo,
-		ID:      appointment.ID,
-	}, response.CodeSuccess, nil
-}
-
-func saveImageFile(fh *multipart.FileHeader) (string, error) {
-	src, err := fh.Open()
-	if err != nil {
-		return "", err
-	}
-	defer src.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, src); err != nil {
-		return "", err
-	}
-	hash := hex.EncodeToString(h.Sum(nil))
-	ext := strings.ToLower(filepath.Ext(fh.Filename))
-	dateDir := time.Now().Format("20060102")
-	dir := filepath.Join(ImageUploadPath, dateDir)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	fileName := fmt.Sprintf("%s%s", hash[:16], ext)
-	dstPath := filepath.Join(dir, fileName)
-
-	if _, err := src.Seek(0, io.SeekStart); err != nil {
-		return "", err
-	}
-	dst, err := os.Create(dstPath)
-	if err != nil {
-		return "", err
-	}
-	defer dst.Close()
-	if _, err := io.Copy(dst, src); err != nil {
-		return "", err
-	}
-
-	url := fmt.Sprintf("%s/%s/%s", ImageURLPrefix, dateDir, fileName)
-	return url, nil
 }
 
 func generateOrderNo() string {
@@ -551,6 +516,19 @@ func GetApplianceTypes() ([]model.ApplianceType, int, error) {
 	return types, response.CodeSuccess, nil
 }
 
+func GetAppointmentDetail(id uint64) (*dto.AppointmentItem, int, error) {
+	var appointment model.Appointment
+	err := database.DB.Preload("ApplianceType").Preload("Slot").
+		Where("id = ?", id).First(&appointment).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, response.CodeAppointmentNotFound, err
+		}
+		return nil, response.CodeDBError, err
+	}
+	return convertAppointment(&appointment), response.CodeSuccess, nil
+}
+
 func convertAppointment(a *model.Appointment) *dto.AppointmentItem {
 	statusText := map[uint8]string{
 		1: "待上门",
@@ -577,17 +555,4 @@ func convertAppointment(a *model.Appointment) *dto.AppointmentItem {
 		EndTime:         a.Slot.EndTime,
 	}
 	return item
-}
-
-func GetAppointmentDetail(id uint64) (*dto.AppointmentItem, int, error) {
-	var appointment model.Appointment
-	err := database.DB.Preload("ApplianceType").Preload("Slot").
-		Where("id = ?", id).First(&appointment).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, response.CodeAppointmentNotFound, err
-		}
-		return nil, response.CodeDBError, err
-	}
-	return convertAppointment(&appointment), response.CodeSuccess, nil
 }
